@@ -2,12 +2,10 @@
 set -euo pipefail
 LISTEN_PORT="9100"
 
-# ===================== 核心修复：强制从终端读取输入【管道执行必加】 =====================
-# 解决 wget | sudo bash 管道执行时，read跳过输入的问题，用 </dev/tty 强制绑定终端
+# ===================== 终极修复：强制从系统控制台读取输入【sudo+管道必用这个】 =====================
 echo -e "\033[32m===== Prometheus node_exporter 一键安装脚本(自动获取最新版) =====\033[0m"
 while true; do
-    read -p "请输入本机需要监听的IP地址(内网/外网IP均可，推荐内网IP)：" LISTEN_IP </dev/tty
-    # 校验IP不能为空
+    read -p "请输入本机需要监听的IP地址(内网/外网IP均可，推荐内网IP)：" LISTEN_IP < /dev/console
     if [ -n "${LISTEN_IP}" ]; then
         break
     fi
@@ -15,25 +13,25 @@ while true; do
 done
 echo -e "✅ 已确认监听地址：\033[32m${LISTEN_IP}:${LISTEN_PORT}\033[0m\n"
 
-# 1. 定义项目地址+获取node_exporter最新版本tag
+# 1. 获取最新版本
 github_project="prometheus/node_exporter"
 echo "🔍 正在获取node_exporter最新版本..."
 tag=$(wget -qO- -t1 -T2 "https://api.github.com/repos/${github_project}/releases/latest" | grep "tag_name" | head -n 1 | awk -F ":" '{print $2}' | sed 's/\"//g;s/,//g;s/ //g')
 echo "✅ 获取到最新版本: ${tag}"
 version=${tag#*v}
 
-# 2. 下载+解压+安装最新版二进制文件
+# 2. 下载解压安装
 echo -e "\n📥 开始下载并安装 node_exporter ${version} ..."
 wget -q https://github.com/prometheus/node_exporter/releases/download/${tag}/node_exporter-${version}.linux-amd64.tar.gz && \
-tar xvfz node_exporter-*.tar.gz && \
+tar xzf node_exporter-*.tar.gz && \
 rm -f node_exporter-*.tar.gz
 sudo mv node_exporter-*.linux-amd64/node_exporter /usr/local/bin
 rm -rf node_exporter-*.linux-amd64*
 
-# 3. 创建无登录权限的专用运行用户(已存在则跳过，不报错)
+# 3. 创建专用用户
 sudo useradd -rs /bin/false node_exporter >/dev/null 2>&1 || echo "ℹ️ 用户node_exporter已存在，跳过创建"
 
-# 4. 生成node_exporter的systemd系统服务文件
+# 4. 生成服务文件
 sudo cat > /etc/systemd/system/node_exporter.service <<EOF
 [Unit]
 Description=Node Exporter
@@ -52,12 +50,11 @@ ExecStart=/usr/local/bin/node_exporter
 WantedBy=multi-user.target
 EOF
 
-# ========== 核心修复：彻底解决 sed unknown option to s 报错 ==========
-# 用 @ 作为分隔符（IP里永远不会有@），替代原来的 / 分隔符，百分百兼容所有IP
+# ========== 彻底根治sed报错：用@做分隔符，绝对无错 ==========
 echo -e "\n⚙️ 正在配置监听地址，写入服务文件..."
 sudo sed -i "s@ExecStart=/usr/local/bin/node_exporter@ExecStart=/usr/local/bin/node_exporter --web.listen-address=${LISTEN_IP}:${LISTEN_PORT}@" /etc/systemd/system/node_exporter.service
 
-# 5. 重载系统服务+开机自启+重启服务+查看运行状态
+# 5. 重载+启动服务
 echo -e "\n🚀 重载配置并启动服务..."
 sudo systemctl daemon-reload
 sudo systemctl enable --now node_exporter
